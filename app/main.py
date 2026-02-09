@@ -391,6 +391,15 @@ class MainWindow(QtWidgets.QMainWindow):
             "Compartment Map",
             "Top bar action: Generate Compartments.",
         )
+        key_row = QtWidgets.QHBoxLayout()
+        key_label = QtWidgets.QLabel("Compartment key")
+        key_label.setObjectName("CardSubtitle")
+        self.compartment_key_combo = QtWidgets.QComboBox()
+        self.compartment_key_combo.addItem("Auto (primary)", "")
+        self.compartment_key_combo.setEnabled(False)
+        key_row.addWidget(key_label)
+        key_row.addWidget(self.compartment_key_combo, stretch=1)
+        card_layout.addLayout(key_row)
         self.compartment_label = QtWidgets.QLabel("No compartment map loaded.")
         self.compartment_label.setObjectName("PreviewSurface")
         self.compartment_label.setAlignment(QtCore.Qt.AlignCenter)
@@ -673,10 +682,39 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _load_outputs(self, out_dir: Path) -> None:
         self.current_out_dir = out_dir
+        self._refresh_compartment_keys(out_dir)
         self._load_qc_images(out_dir)
         self._load_karospace(out_dir)
         self._load_umap_image(out_dir)
         self._load_compartment_image(out_dir)
+
+    def _refresh_compartment_keys(self, out_dir: Path) -> None:
+        keys: List[str] = []
+        cluster_info_path = out_dir / "data" / "cluster_info.json"
+        if cluster_info_path.exists():
+            try:
+                payload = json.loads(cluster_info_path.read_text())
+            except json.JSONDecodeError:
+                payload = {}
+
+            raw_keys = payload.get("compartment_keys", [])
+            if isinstance(raw_keys, list):
+                for key in raw_keys:
+                    key_text = str(key).strip()
+                    if key_text and key_text not in keys:
+                        keys.append(key_text)
+
+            primary_key = str(payload.get("compartment_key") or "").strip()
+            if primary_key and primary_key not in keys:
+                keys.insert(0, primary_key)
+
+        self.compartment_key_combo.blockSignals(True)
+        self.compartment_key_combo.clear()
+        self.compartment_key_combo.addItem("Auto (primary)", "")
+        for key in keys:
+            self.compartment_key_combo.addItem(key, key)
+        self.compartment_key_combo.setEnabled(bool(keys))
+        self.compartment_key_combo.blockSignals(False)
 
     def _load_qc_images(self, out_dir: Path) -> None:
         for i in reversed(range(self.qc_layout.count())):
@@ -824,6 +862,9 @@ class MainWindow(QtWidgets.QMainWindow):
             "--output",
             str(output_path),
         ]
+        selected_key = str(self.compartment_key_combo.currentData() or "").strip()
+        if selected_key:
+            args += ["--color", selected_key]
 
         self._run_visual_process(args, output_path, self.compartment_label)
 

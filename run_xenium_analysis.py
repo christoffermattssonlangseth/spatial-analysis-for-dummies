@@ -176,13 +176,42 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mana-compartment-resolutions",
         default="1.0",
-        help="Comma-separated Leiden resolutions for MANA compartment clustering (default: 1.0).",
+        help="Comma-separated Leiden resolutions for MANA compartments (default: 1.0).",
     )
     parser.add_argument(
         "--mana-compartment-neighbors",
         type=int,
         default=15,
         help="n_neighbors for MANA compartment clustering (default: 15).",
+    )
+    parser.add_argument(
+        "--mana-compartment-method",
+        choices=["gmm", "leiden", "both"],
+        default="gmm",
+        help="Compartment clustering method for MANA output (default: gmm).",
+    )
+    parser.add_argument(
+        "--mana-gmm-components",
+        default="6,10,14",
+        help="Comma-separated number of components for MANA GMM compartments (default: 6,10,14).",
+    )
+    parser.add_argument(
+        "--mana-gmm-covariance-type",
+        choices=["full", "tied", "diag", "spherical"],
+        default="full",
+        help="Covariance type for MANA GMM compartments (default: full).",
+    )
+    parser.add_argument(
+        "--mana-gmm-random-state",
+        type=int,
+        default=0,
+        help="Random seed for MANA GMM compartments (default: 0).",
+    )
+    parser.add_argument(
+        "--mana-gmm-n-init",
+        type=int,
+        default=3,
+        help="Number of GMM initializations per component count (default: 3).",
     )
     parser.add_argument(
         "--mana-no-normalize",
@@ -300,6 +329,7 @@ def main() -> None:
     ad_clustered, cluster_key = run_clustering(ad_clustered, args, data_out_dir)
 
     compartment_key = None
+    compartment_keys: list[str] = []
     if args.mana_aggregate:
         print("STEP: Running MANA weighted representation")
         maybe_run_mana(
@@ -318,10 +348,15 @@ def main() -> None:
             include_self=args.mana_include_self,
         )
         print("STEP: Running compartment clustering")
-        compartment_key = run_compartment_clustering(ad_clustered, args, data_out_dir)
+        compartment_result = run_compartment_clustering(ad_clustered, args, data_out_dir)
+        compartment_key = str(compartment_result.get("primary_key"))
+        compartment_keys = [str(k) for k in compartment_result.get("all_keys", [])]
     cluster_info = {
         "cluster_key": cluster_key,
         "compartment_key": compartment_key,
+        "compartment_keys": compartment_keys,
+        "mana_compartment_method": args.mana_compartment_method,
+        "mana_gmm_components": args.mana_gmm_components,
         "leiden_resolutions": args.leiden_resolutions,
         "mana_compartment_resolutions": args.mana_compartment_resolutions,
     }
@@ -334,6 +369,8 @@ def main() -> None:
     print(f"Saved clustered AnnData: {clustered_path}")
     print(f"Marker genes saved: {data_out_dir / 'markers_by_cluster.csv'}")
     print(f"Leiden key used for marker ranking: {cluster_key}")
+    if compartment_keys:
+        print(f"MANA compartment keys: {', '.join(compartment_keys)}")
 
     if args.karospace_html:
         print("STEP: Exporting KaroSpace HTML")

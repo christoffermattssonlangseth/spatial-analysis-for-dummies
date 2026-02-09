@@ -17,6 +17,7 @@ CORE_MODULES = [
     ("pandas", "pandas"),
     ("PySide6", "PySide6"),
     ("scanpy", "scanpy"),
+    ("sklearn", "scikit-learn"),
     ("scipy", "scipy"),
     ("seaborn", "seaborn"),
 ]

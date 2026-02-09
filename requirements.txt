@@ -4,5 +4,6 @@ numpy
 pandas
 PySide6
 scanpy
+scikit-learn
 scipy
 seaborn

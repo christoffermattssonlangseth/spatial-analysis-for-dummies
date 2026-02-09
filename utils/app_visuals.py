@@ -22,15 +22,29 @@ def _infer_default_color(
     fallback: str = "leiden",
     preferred_key: Optional[str] = None,
 ) -> str:
+    def _to_candidates(value: object) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
+
     cluster_key = None
 
     if cluster_info_path and cluster_info_path.is_file():
         try:
             payload = json.loads(cluster_info_path.read_text())
+            candidates: list[str] = []
             if preferred_key:
-                cluster_key = payload.get(preferred_key)
-            if not cluster_key:
-                cluster_key = payload.get("cluster_key")
+                candidates.extend(_to_candidates(payload.get(preferred_key)))
+                if preferred_key.endswith("s"):
+                    candidates.extend(_to_candidates(payload.get(preferred_key[:-1])))
+            if not candidates:
+                candidates.extend(_to_candidates(payload.get("cluster_key")))
+            for candidate in candidates:
+                if candidate in adata.obs.columns:
+                    cluster_key = candidate
+                    break
         except json.JSONDecodeError:
             cluster_key = None
 
@@ -80,7 +94,7 @@ def generate_compartment_map(h5ad_path: Path, output_path: Path, color: Optional
     color_key = color or _infer_default_color(
         adata,
         cluster_info,
-        preferred_key="compartment_key",
+        preferred_key="compartment_keys",
     )
 
     plot_spatial_compact_fast(

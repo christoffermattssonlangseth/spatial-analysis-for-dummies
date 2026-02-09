@@ -114,6 +114,9 @@ This will produce `dist/InSituCore-portable.zip`.
 5. Optional: enable `Export KaroSpace HTML`.
 6. Click `Run`.
 7. Use top-bar actions: `Load Outputs`, `Generate UMAP`, `Generate Compartments`.
+8. For compartments, choose a compartment key in the `Compartment Map` tab:
+- `Auto (primary)` uses the pipeline-selected default.
+- Or choose a specific key like `compartment_gmm_k6` / `compartment_leiden_1.0`.
 
 ## Supported input layouts
 
@@ -148,6 +151,7 @@ Written under `--out-dir`:
 - `data/clustered.h5ad`
 - `data/cluster_info.json`
 - `data/markers_by_cluster.csv`
+- `data/compartment_models.csv` (model summary for MANA compartments, including AIC/BIC for GMM)
 - `xenium_qc/summary_by_run.csv`
 - `xenium_qc/gene_detection_overall.csv`
 - `xenium_qc/*.png`
@@ -171,6 +175,9 @@ Useful options:
 - `--run-search-depth` (`1` or `2`)
 - `--sample-id-source` (`auto`, `run`, `parent`)
 - `--mana-aggregate`
+- `--mana-compartment-method` (`gmm`, `leiden`, `both`; default `gmm`)
+- `--mana-gmm-components` (e.g. `6,10,14`)
+- `--mana-compartment-resolutions` (for Leiden compartments)
 - `--karospace-html /absolute/path/to/karospace.html`
 
 ## Visual themes

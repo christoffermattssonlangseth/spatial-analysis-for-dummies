@@ -15,6 +15,7 @@ import pandas as pd
 import scanpy as sc
 import seaborn as sns
 from scipy import sparse
+from sklearn.mixture import GaussianMixture
 
 from .mana import aggregate_neighbors_weighted
 from .karospace import export_to_html, load_spatial_data
@@ -317,38 +318,107 @@ def run_compartment_clustering(
     ad: sc.AnnData,
     args,
     output_data_dir: Path,
-) -> str:
+) -> dict[str, object]:
     if args.mana_out_key not in ad.obsm:
         raise KeyError(
             f"Expected MANA output '{args.mana_out_key}' in adata.obsm. "
             "Run with --mana-aggregate first."
         )
 
-    print("STEP: Computing compartment neighbors")
-    sc.pp.neighbors(
-        ad,
-        n_neighbors=args.mana_compartment_neighbors,
-        use_rep=args.mana_out_key,
-        key_added="mana_compartments",
-    )
+    all_keys: list[str] = []
+    model_rows: list[dict[str, object]] = []
 
-    resolution_tokens = [
-        token.strip()
-        for token in args.mana_compartment_resolutions.split(",")
-        if token.strip()
-    ]
-    if not resolution_tokens:
-        raise ValueError("No valid MANA compartment resolutions were provided.")
+    if args.mana_compartment_method in {"leiden", "both"}:
+        print("STEP: Computing compartment neighbors")
+        sc.pp.neighbors(
+            ad,
+            n_neighbors=args.mana_compartment_neighbors,
+            use_rep=args.mana_out_key,
+            key_added="mana_compartments",
+        )
 
-    last_key = ""
-    for resolution_token in resolution_tokens:
-        resolution = float(resolution_token)
-        key = f"compartment_leiden_{resolution_token}"
-        print(f"STEP: Running compartment Leiden ({key})")
-        sc.tl.leiden(ad, resolution=resolution, key_added=key, neighbors_key="mana_compartments")
-        last_key = key
+        resolution_tokens = [
+            token.strip()
+            for token in args.mana_compartment_resolutions.split(",")
+            if token.strip()
+        ]
+        if not resolution_tokens:
+            raise ValueError("No valid MANA compartment resolutions were provided.")
 
-    return last_key
+        for resolution_token in resolution_tokens:
+            resolution = float(resolution_token)
+            key = f"compartment_leiden_{resolution_token}"
+            print(f"STEP: Running compartment Leiden ({key})")
+            sc.tl.leiden(
+                ad,
+                resolution=resolution,
+                key_added=key,
+                neighbors_key="mana_compartments",
+            )
+            all_keys.append(key)
+            n_clusters = int(ad.obs[key].astype(str).nunique())
+            model_rows.append(
+                {
+                    "key": key,
+                    "method": "leiden",
+                    "parameter": resolution,
+                    "n_clusters": n_clusters,
+                    "aic": np.nan,
+                    "bic": np.nan,
+                }
+            )
+
+    if args.mana_compartment_method in {"gmm", "both"}:
+        component_tokens = [
+            token.strip()
+            for token in args.mana_gmm_components.split(",")
+            if token.strip()
+        ]
+        if not component_tokens:
+            raise ValueError("No valid MANA GMM components were provided.")
+
+        rep = np.asarray(ad.obsm[args.mana_out_key])
+        for token in component_tokens:
+            n_components = int(token)
+            key = f"compartment_gmm_k{n_components}"
+            print(f"STEP: Running compartment GMM ({key})")
+            gmm = GaussianMixture(
+                n_components=n_components,
+                covariance_type=args.mana_gmm_covariance_type,
+                random_state=args.mana_gmm_random_state,
+                n_init=args.mana_gmm_n_init,
+            )
+            labels = gmm.fit_predict(rep)
+            ad.obs[key] = pd.Categorical(labels.astype(str))
+            all_keys.append(key)
+            model_rows.append(
+                {
+                    "key": key,
+                    "method": "gmm",
+                    "parameter": n_components,
+                    "n_clusters": int(ad.obs[key].astype(str).nunique()),
+                    "aic": float(gmm.aic(rep)),
+                    "bic": float(gmm.bic(rep)),
+                }
+            )
+
+    if not all_keys:
+        raise ValueError("No compartment clustering outputs were produced.")
+
+    model_df = pd.DataFrame(model_rows)
+    model_df.to_csv(output_data_dir / "compartment_models.csv", index=False)
+
+    if args.mana_compartment_method == "gmm":
+        primary_key = next((k for k in all_keys if k.startswith("compartment_gmm_")), all_keys[0])
+    elif args.mana_compartment_method == "leiden":
+        primary_key = all_keys[-1]
+    else:
+        primary_key = next((k for k in all_keys if k.startswith("compartment_gmm_")), all_keys[-1])
+
+    return {
+        "primary_key": primary_key,
+        "all_keys": all_keys,
+    }
 
 
 def preprocess_for_clustering(ad: sc.AnnData, args) -> None:
