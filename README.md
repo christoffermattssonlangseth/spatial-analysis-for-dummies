@@ -10,21 +10,47 @@ Local desktop app for Xenium-style spatial transcriptomics analysis.
 
 ## Quick start
 
+Create and activate an environment (recommended):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
 Install core dependencies:
 
 ```bash
-pip install scanpy pandas numpy scipy matplotlib seaborn PySide6
+pip install -r requirements.txt
 ```
 
 Optional dependencies:
 
 ```bash
-pip install squidpy
+pip install -r requirements-optional.txt
+```
+
+- `squidpy` is used when MANA needs to build spatial neighbors from coordinates.
+- Embedded KaroSpace in-app requires `PySide6.QtWebEngineWidgets`.
+  Depending on Python and platform, this may come from `PySide6` directly or require:
+
+```bash
 pip install PySide6-QtWebEngine
 ```
 
-- `squidpy` is used when MANA needs to build spatial neighbors.
-- `PySide6-QtWebEngine` enables embedded KaroSpace in-app (otherwise it opens in browser).
+If `PySide6-QtWebEngine` is unavailable for your Python version, the app still works and opens KaroSpace in your browser.
+
+Check your environment:
+
+```bash
+python3 check_env.py
+```
+
+Strict mode (fails if optional packages are missing):
+
+```bash
+python3 check_env.py --require-optional
+```
 
 Run the app:
 

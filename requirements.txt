@@ -1,0 +1,8 @@
+anndata
+matplotlib
+numpy
+pandas
+PySide6
+scanpy
+scipy
+seaborn
