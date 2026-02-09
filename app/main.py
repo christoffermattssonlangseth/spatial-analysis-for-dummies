@@ -7,7 +7,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -21,6 +21,7 @@ except Exception:
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 RECENT_PATH = Path.home() / ".spatial-analysis-for-dummies" / "recent.json"
+THEME_PATH = Path(__file__).with_name("theme.qss")
 
 
 @dataclass
@@ -78,24 +79,46 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.process: Optional[QtCore.QProcess] = None
         self._plot_processes: List[QtCore.QProcess] = []
+        self._busy_counter = 0
+        self._busy_base_text = "Running"
+        self._runner_frames = ["o-/", "o_/", "o-\\", "o_\\"]
+        self._busy_tick = 0
+        self._busy_has_error = False
         self.current_out_dir: Optional[Path] = None
         self.current_karospace_html: Optional[Path] = None
         self.recent_projects: List[RecentProject] = _load_recent()
+        self._theme_watcher = QtCore.QFileSystemWatcher(self)
 
         self._build_ui()
+        self._busy_timer = QtCore.QTimer(self)
+        self._busy_timer.setInterval(280)
+        self._busy_timer.timeout.connect(self._animate_busy_state)
+        self._setup_theme_watcher()
         self._populate_recent()
 
     def _build_ui(self) -> None:
         root = QtWidgets.QWidget()
-        layout = QtWidgets.QHBoxLayout(root)
-        layout.setContentsMargins(8, 8, 8, 8)
+        root.setObjectName("Root")
+        root_layout = QtWidgets.QVBoxLayout(root)
+        root_layout.setContentsMargins(14, 14, 14, 14)
+        root_layout.setSpacing(12)
+
+        root_layout.addWidget(self._build_top_bar())
+
+        layout = QtWidgets.QHBoxLayout()
+        layout.setSpacing(12)
+        root_layout.addLayout(layout, stretch=1)
 
         self.recent_list = QtWidgets.QListWidget()
+        self.recent_list.setObjectName("RecentList")
         self.recent_list.setMaximumWidth(320)
         self.recent_list.itemSelectionChanged.connect(self._on_recent_selected)
 
-        recent_box = QtWidgets.QGroupBox("Recent Projects")
-        recent_layout = QtWidgets.QVBoxLayout(recent_box)
+        recent_box, recent_layout = self._create_card(
+            "Recent Projects",
+            "Load existing runs without recomputing.",
+        )
+        recent_box.setMaximumWidth(340)
         recent_layout.addWidget(self.recent_list)
 
         self.load_recent_btn = QtWidgets.QPushButton("Load Outputs")
@@ -105,46 +128,148 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(recent_box)
 
         self.tabs = QtWidgets.QTabWidget()
+        self.tabs.setObjectName("MainTabs")
         self.tabs.addTab(self._build_run_tab(), "Run")
         self.tabs.addTab(self._build_qc_tab(), "QC")
         self.tabs.addTab(self._build_spatial_tab(), "Spatial")
         self.tabs.addTab(self._build_umap_tab(), "UMAP")
         self.tabs.addTab(self._build_compartment_tab(), "Compartments")
-        layout.addWidget(self.tabs)
+        tabs_card, tabs_layout = self._create_card("Workspace")
+        tabs_layout.addWidget(self.tabs, stretch=1)
+        layout.addWidget(tabs_card, stretch=1)
 
         self.setCentralWidget(root)
+
+    def _build_top_bar(self) -> QtWidgets.QWidget:
+        top_bar = QtWidgets.QFrame()
+        top_bar.setObjectName("TopBar")
+        layout = QtWidgets.QHBoxLayout(top_bar)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(10)
+
+        title_col = QtWidgets.QVBoxLayout()
+        title_col.setSpacing(1)
+        title = QtWidgets.QLabel("Spatial Analysis")
+        title.setObjectName("TopTitle")
+        subtitle = QtWidgets.QLabel("Paper Atlas")
+        subtitle.setObjectName("TopSubtitle")
+        title_col.addWidget(title)
+        title_col.addWidget(subtitle)
+        layout.addLayout(title_col)
+        layout.addStretch(1)
+
+        self.top_run_btn = QtWidgets.QPushButton("Run")
+        self.top_run_btn.setProperty("variant", "primary")
+        self.top_run_btn.clicked.connect(self._run_pipeline)
+        layout.addWidget(self.top_run_btn)
+
+        self.top_load_btn = QtWidgets.QPushButton("Load Outputs")
+        self.top_load_btn.clicked.connect(self._load_outputs_only)
+        layout.addWidget(self.top_load_btn)
+
+        self.top_umap_btn = QtWidgets.QPushButton("Generate UMAP")
+        self.top_umap_btn.clicked.connect(self._generate_umap_plot)
+        layout.addWidget(self.top_umap_btn)
+
+        self.top_comp_btn = QtWidgets.QPushButton("Generate Compartments")
+        self.top_comp_btn.clicked.connect(self._generate_compartment_map)
+        layout.addWidget(self.top_comp_btn)
+
+        self.refresh_theme_btn = QtWidgets.QPushButton("Refresh Theme")
+        self.refresh_theme_btn.clicked.connect(self._apply_theme)
+        layout.addWidget(self.refresh_theme_btn)
+
+        self.activity_stage = QtWidgets.QLabel("Idle")
+        self.activity_stage.setObjectName("ActivityStage")
+        layout.addWidget(self.activity_stage)
+
+        self.runner_glyph = QtWidgets.QLabel("o-/")
+        self.runner_glyph.setObjectName("RunnerGlyph")
+        self.runner_glyph.setText("   ")
+        layout.addWidget(self.runner_glyph)
+
+        self.status_chip = QtWidgets.QLabel("Ready")
+        self.status_chip.setObjectName("StatusChip")
+        layout.addWidget(self.status_chip)
+        return top_bar
+
+    def _create_card(
+        self,
+        title: str,
+        subtitle: Optional[str] = None,
+    ) -> tuple[QtWidgets.QFrame, QtWidgets.QVBoxLayout]:
+        card = QtWidgets.QFrame()
+        card.setObjectName("Card")
+        layout = QtWidgets.QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(10)
+
+        if title:
+            title_label = QtWidgets.QLabel(title)
+            title_label.setObjectName("CardTitle")
+            layout.addWidget(title_label)
+        if subtitle:
+            subtitle_label = QtWidgets.QLabel(subtitle)
+            subtitle_label.setObjectName("CardSubtitle")
+            layout.addWidget(subtitle_label)
+        return card, layout
 
     def _build_run_tab(self) -> QtWidgets.QWidget:
         widget = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(widget)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(10)
+
+        data_card, data_layout = self._create_card(
+            "Dataset",
+            "Configure source and output folders for a pipeline run.",
+        )
 
         form = QtWidgets.QFormLayout()
+        form.setSpacing(10)
 
         self.data_dir_edit = QtWidgets.QLineEdit()
         self.data_dir_edit.setPlaceholderText("/path/to/dataset")
         data_btn = QtWidgets.QPushButton("Browse")
         data_btn.clicked.connect(lambda: self._choose_dir(self.data_dir_edit))
-        data_row = QtWidgets.QHBoxLayout()
+        data_row_w = QtWidgets.QWidget()
+        data_row = QtWidgets.QHBoxLayout(data_row_w)
+        data_row.setContentsMargins(0, 0, 0, 0)
         data_row.addWidget(self.data_dir_edit)
         data_row.addWidget(data_btn)
-        form.addRow("Data dir", data_row)
+        form.addRow("Data dir", data_row_w)
 
         self.out_dir_edit = QtWidgets.QLineEdit()
         self.out_dir_edit.setPlaceholderText("/path/to/output")
         out_btn = QtWidgets.QPushButton("Browse")
         out_btn.clicked.connect(lambda: self._choose_dir(self.out_dir_edit))
-        out_row = QtWidgets.QHBoxLayout()
+        out_row_w = QtWidgets.QWidget()
+        out_row = QtWidgets.QHBoxLayout(out_row_w)
+        out_row.setContentsMargins(0, 0, 0, 0)
         out_row.addWidget(self.out_dir_edit)
         out_row.addWidget(out_btn)
-        form.addRow("Output dir", out_row)
+        form.addRow("Output dir", out_row_w)
 
         self.run_prefix_edit = QtWidgets.QLineEdit("output-")
         form.addRow("Run prefix", self.run_prefix_edit)
 
-        layout.addLayout(form)
+        self.run_search_depth_combo = QtWidgets.QComboBox()
+        self.run_search_depth_combo.addItem("Direct folders only", 1)
+        self.run_search_depth_combo.addItem("One level below samples", 2)
+        form.addRow("Run depth", self.run_search_depth_combo)
 
-        options_box = QtWidgets.QGroupBox("Optional Steps")
-        options_layout = QtWidgets.QVBoxLayout(options_box)
+        self.sample_id_source_combo = QtWidgets.QComboBox()
+        self.sample_id_source_combo.addItem("Auto", "auto")
+        self.sample_id_source_combo.addItem("From run label", "run")
+        self.sample_id_source_combo.addItem("From parent folder", "parent")
+        form.addRow("Sample ID source", self.sample_id_source_combo)
+        data_layout.addLayout(form)
+        layout.addWidget(data_card)
+
+        options_box, options_layout = self._create_card(
+            "Optional Steps",
+            "Enable downstream modules for weighted compartments and viewer export.",
+        )
 
         self.mana_check = QtWidgets.QCheckBox("Enable MANA weighted aggregation")
         self.mana_layers = QtWidgets.QSpinBox()
@@ -178,82 +303,91 @@ class MainWindow(QtWidgets.QMainWindow):
 
         layout.addWidget(options_box)
 
-        button_row = QtWidgets.QHBoxLayout()
-        self.run_btn = QtWidgets.QPushButton("Run Pipeline")
-        self.run_btn.clicked.connect(self._run_pipeline)
-        self.load_outputs_btn = QtWidgets.QPushButton("Load Outputs Only")
-        self.load_outputs_btn.clicked.connect(self._load_outputs_only)
-        button_row.addWidget(self.run_btn)
-        button_row.addWidget(self.load_outputs_btn)
+        action_hint = QtWidgets.QLabel("Primary actions are in the top bar.")
+        action_hint.setObjectName("CardSubtitle")
+        layout.addWidget(action_hint)
 
-        layout.addLayout(button_row)
-
+        logs_card, logs_layout = self._create_card("Run Log")
         self.log_view = QtWidgets.QPlainTextEdit()
+        self.log_view.setObjectName("LogView")
         self.log_view.setReadOnly(True)
-        layout.addWidget(self.log_view, stretch=1)
+        logs_layout.addWidget(self.log_view, stretch=1)
+        layout.addWidget(logs_card, stretch=1)
 
         return widget
 
     def _build_qc_tab(self) -> QtWidgets.QWidget:
         widget = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(widget)
+        layout.setContentsMargins(2, 2, 2, 2)
 
+        card, card_layout = self._create_card("QC Gallery", "Generated plots from xenium_qc.")
         self.qc_scroll = QtWidgets.QScrollArea()
         self.qc_scroll.setWidgetResizable(True)
         self.qc_container = QtWidgets.QWidget()
         self.qc_layout = QtWidgets.QVBoxLayout(self.qc_container)
         self.qc_layout.addStretch(1)
         self.qc_scroll.setWidget(self.qc_container)
-
-        layout.addWidget(self.qc_scroll)
+        card_layout.addWidget(self.qc_scroll, stretch=1)
+        layout.addWidget(card, stretch=1)
         return widget
 
     def _build_spatial_tab(self) -> QtWidgets.QWidget:
         widget = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(widget)
+        layout.setContentsMargins(2, 2, 2, 2)
+
+        card, card_layout = self._create_card(
+            "Spatial Map",
+            "KaroSpace viewer output for section-level inspection.",
+        )
 
         if WEB_AVAILABLE:
             self.spatial_view = QWebEngineView()
-            layout.addWidget(self.spatial_view)
+            card_layout.addWidget(self.spatial_view, stretch=1)
         else:
             self.spatial_view = None
             self.spatial_fallback_label = QtWidgets.QLabel(
                 "Qt WebEngine not available. Spatial viewer will open in your browser."
             )
             self.spatial_fallback_label.setAlignment(QtCore.Qt.AlignCenter)
-            layout.addWidget(self.spatial_fallback_label)
+            card_layout.addWidget(self.spatial_fallback_label, stretch=1)
             self.spatial_open_btn = QtWidgets.QPushButton("Open KaroSpace in Browser")
             self.spatial_open_btn.clicked.connect(self._open_karospace_external)
-            layout.addWidget(self.spatial_open_btn)
+            card_layout.addWidget(self.spatial_open_btn)
 
+        layout.addWidget(card, stretch=1)
         return widget
 
     def _build_umap_tab(self) -> QtWidgets.QWidget:
         widget = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(widget)
+        layout.setContentsMargins(2, 2, 2, 2)
 
+        card, card_layout = self._create_card("UMAP", "Top bar action: Generate UMAP.")
         self.umap_label = QtWidgets.QLabel("No UMAP image loaded.")
+        self.umap_label.setObjectName("PreviewSurface")
         self.umap_label.setAlignment(QtCore.Qt.AlignCenter)
         self.umap_label.setMinimumHeight(400)
-        layout.addWidget(self.umap_label)
-
-        self.umap_generate_btn = QtWidgets.QPushButton("Generate UMAP Plot")
-        self.umap_generate_btn.clicked.connect(self._generate_umap_plot)
-        layout.addWidget(self.umap_generate_btn)
+        card_layout.addWidget(self.umap_label, stretch=1)
+        layout.addWidget(card, stretch=1)
         return widget
 
     def _build_compartment_tab(self) -> QtWidgets.QWidget:
         widget = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(widget)
+        layout.setContentsMargins(2, 2, 2, 2)
 
+        card, card_layout = self._create_card(
+            "Compartment Map",
+            "Top bar action: Generate Compartments.",
+        )
         self.compartment_label = QtWidgets.QLabel("No compartment map loaded.")
+        self.compartment_label.setObjectName("PreviewSurface")
         self.compartment_label.setAlignment(QtCore.Qt.AlignCenter)
         self.compartment_label.setMinimumHeight(400)
-        layout.addWidget(self.compartment_label)
-
-        self.compartment_generate_btn = QtWidgets.QPushButton("Generate Compartment Map")
-        self.compartment_generate_btn.clicked.connect(self._generate_compartment_map)
-        layout.addWidget(self.compartment_generate_btn)
+        card_layout.addWidget(self.compartment_label, stretch=1)
+        layout.addWidget(card, stretch=1)
         return widget
 
     def _choose_dir(self, line_edit: QtWidgets.QLineEdit) -> None:
@@ -275,6 +409,84 @@ class MainWindow(QtWidgets.QMainWindow):
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_view.appendPlainText(f"[{timestamp}] {message}")
 
+    def _enter_busy(self, stage_text: str) -> None:
+        if self._busy_counter == 0:
+            self._busy_has_error = False
+            self._busy_tick = 0
+            self._busy_timer.start()
+        self._busy_counter += 1
+        self._busy_base_text = stage_text
+        self._set_activity_stage(stage_text)
+        self.status_chip.setText("Running")
+
+    def _leave_busy(self, failed: bool = False) -> None:
+        if failed:
+            self._busy_has_error = True
+        if self._busy_counter > 0:
+            self._busy_counter -= 1
+        if self._busy_counter == 0:
+            self._busy_timer.stop()
+            self.runner_glyph.setText("   ")
+            self._set_activity_stage("Idle")
+            self.status_chip.setText("Error" if self._busy_has_error else "Ready")
+
+    def _animate_busy_state(self) -> None:
+        if self._busy_counter <= 0:
+            self.runner_glyph.setText("   ")
+            self.status_chip.setText("Ready")
+            return
+        frame = self._runner_frames[self._busy_tick % len(self._runner_frames)]
+        self.runner_glyph.setText(frame)
+        self.status_chip.setText("Running")
+        self._busy_tick += 1
+
+    def _set_activity_stage(self, text: str) -> None:
+        # Keep top bar width stable while still showing useful per-step status.
+        fm = self.activity_stage.fontMetrics()
+        elided = fm.elidedText(text, QtCore.Qt.ElideRight, self.activity_stage.width() or 240)
+        self.activity_stage.setText(elided)
+        self.activity_stage.setToolTip(text)
+
+    def _update_stage_from_log(self, line: str) -> None:
+        if line.startswith("STEP: "):
+            stage_text = line.replace("STEP: ", "", 1).strip()
+            self._busy_base_text = stage_text
+            self._set_activity_stage(stage_text)
+            return
+
+        stage_map = [
+            ("Loading run:", "Loading runs"),
+            ("Saved raw AnnData:", "Preparing QC"),
+            ("Saved QC outputs:", "QC complete"),
+            ("Running MANA weighted aggregation...", "MANA aggregation"),
+            ("Saved clustered AnnData:", "Saving clustered data"),
+            ("Exporting KaroSpace HTML...", "Exporting KaroSpace"),
+        ]
+        for token, stage_text in stage_map:
+            if token in line:
+                self._busy_base_text = stage_text
+                self._set_activity_stage(stage_text)
+                return
+
+    def _setup_theme_watcher(self) -> None:
+        if not THEME_PATH.exists():
+            return
+        self._theme_watcher.addPath(str(THEME_PATH))
+        self._theme_watcher.fileChanged.connect(self._on_theme_file_changed)
+
+    def _on_theme_file_changed(self, changed_path: str) -> None:
+        self._apply_theme()
+        # QFileSystemWatcher can drop changed files; re-add it.
+        if THEME_PATH.exists() and str(THEME_PATH) not in self._theme_watcher.files():
+            self._theme_watcher.addPath(str(THEME_PATH))
+
+    def _apply_theme(self) -> None:
+        app = QtWidgets.QApplication.instance()
+        if app is None or not THEME_PATH.exists():
+            return
+        app.setStyleSheet(THEME_PATH.read_text())
+        self._log("Theme reloaded.")
+
     def _run_pipeline(self) -> None:
         data_dir = self.data_dir_edit.text().strip()
         out_dir = self.out_dir_edit.text().strip()
@@ -291,6 +503,10 @@ class MainWindow(QtWidgets.QMainWindow):
             out_dir,
             "--run-prefix",
             self.run_prefix_edit.text().strip() or "output-",
+            "--run-search-depth",
+            str(self.run_search_depth_combo.currentData()),
+            "--sample-id-source",
+            str(self.sample_id_source_combo.currentData()),
         ]
 
         if self.mana_check.isChecked():
@@ -312,7 +528,8 @@ class MainWindow(QtWidgets.QMainWindow):
             args += ["--karospace-html", karospace_path]
 
         self._log("Starting pipeline...")
-        self.run_btn.setEnabled(False)
+        self._enter_busy("Running pipeline")
+        self.top_run_btn.setEnabled(False)
         self.process = QtCore.QProcess(self)
         self.process.setProgram(args[0])
         self.process.setArguments(args[1:])
@@ -329,10 +546,12 @@ class MainWindow(QtWidgets.QMainWindow):
         for line in text.splitlines():
             if line.strip():
                 self._log(line)
+                self._update_stage_from_log(line)
 
     def _on_process_finished(self, exit_code: int, _status: QtCore.QProcess.ExitStatus) -> None:
-        self.run_btn.setEnabled(True)
+        self.top_run_btn.setEnabled(True)
         self._log(f"Pipeline finished (exit code {exit_code}).")
+        self._leave_busy(failed=exit_code != 0)
         out_dir = self.out_dir_edit.text().strip()
         if out_dir:
             self._load_outputs(Path(out_dir))
@@ -495,6 +714,7 @@ class MainWindow(QtWidgets.QMainWindow):
         target_label: QtWidgets.QLabel,
     ) -> None:
         self._log(f"Generating plot: {output_path.name}")
+        self._enter_busy(f"Generating {output_path.stem}")
         proc = QtCore.QProcess(self)
         self._plot_processes.append(proc)
         proc.setProgram(args[0])
@@ -502,17 +722,26 @@ class MainWindow(QtWidgets.QMainWindow):
         proc.setWorkingDirectory(str(ROOT_DIR))
         proc.setProcessChannelMode(QtCore.QProcess.MergedChannels)
 
+        def _on_plot_output() -> None:
+            text = proc.readAllStandardOutput().data().decode("utf-8", errors="ignore")
+            for line in text.splitlines():
+                if line.strip():
+                    self._log(line)
+
         def _on_finished(exit_code: int, _status: QtCore.QProcess.ExitStatus) -> None:
             if proc in self._plot_processes:
                 self._plot_processes.remove(proc)
             if exit_code != 0:
                 self._log(f"Plot generation failed: {output_path.name}")
+                self._leave_busy(failed=True)
                 return
             if output_path.exists():
                 pixmap = QtGui.QPixmap(str(output_path))
                 target_label.setPixmap(pixmap.scaledToWidth(900, QtCore.Qt.SmoothTransformation))
             self._log(f"Plot ready: {output_path.name}")
+            self._leave_busy(failed=False)
 
+        proc.readyReadStandardOutput.connect(_on_plot_output)
         proc.finished.connect(_on_finished)
         proc.start()
 
@@ -564,6 +793,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
 def main() -> None:
     app = QtWidgets.QApplication(sys.argv)
+    if THEME_PATH.exists():
+        app.setStyleSheet(THEME_PATH.read_text())
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

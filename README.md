@@ -60,6 +60,7 @@ python3 run_xenium_analysis.py \
 ### Useful flags
 
 - `--run-prefix` (default: `output-`)
+- `--run-search-depth` (default: `1`; set `2` for `sample_folder/output-*` layouts)
 - `--min-counts` (default: `50`)
 - `--min-genes` (default: `15`)
 - `--target-sum` (default: `100`)
@@ -69,6 +70,26 @@ python3 run_xenium_analysis.py \
 - `--leiden-resolutions` (default: `0.1,0.5,1,1.5,2`)
 - `--sample-id-split` (default: `__`)
 - `--sample-id-index` (default: `2`)
+- `--sample-id-source` (default: `auto`; one of `auto`, `run`, `parent`)
+
+For nested layouts like:
+
+```text
+/dataset/
+  sample_A/
+    output-.../
+  sample_B/
+    output-.../
+```
+
+use:
+
+```bash
+python3 run_xenium_analysis.py \
+  --data-dir /dataset \
+  --run-search-depth 2 \
+  --sample-id-source parent
+```
 
 ### Optional steps (CLI only)
 
@@ -188,3 +209,5 @@ python3 run_app.py
 ```
 
 The app keeps a small list of recent runs at `~/.spatial-analysis-for-dummies/recent.json`.
+UI theme lives in `app/theme.qss` (`Paper Atlas`) and primary actions are in the top bar:
+`Run`, `Load Outputs`, `Generate UMAP`, `Generate Compartments`.

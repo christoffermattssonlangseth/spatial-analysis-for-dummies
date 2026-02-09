@@ -22,17 +22,29 @@ from .karospace import export_to_html, load_spatial_data
 warnings.filterwarnings("ignore")
 
 
-def discover_runs(base_dir: Path, run_prefix: str) -> list[Path]:
-    runs = [
-        entry
-        for entry in sorted(base_dir.iterdir())
-        if entry.is_dir() and entry.name.startswith(run_prefix)
-    ]
+def discover_runs(base_dir: Path, run_prefix: str, search_depth: int = 1) -> list[Path]:
+    if search_depth < 1:
+        raise ValueError("search_depth must be >= 1")
+
+    runs: list[Path] = []
+    for entry in sorted(base_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+
+        if entry.name.startswith(run_prefix):
+            runs.append(entry)
+
+        if search_depth >= 2:
+            for child in sorted(entry.iterdir()):
+                if child.is_dir() and child.name.startswith(run_prefix):
+                    runs.append(child)
+
     return runs
 
 
-def load_and_concat_runs(base_dir: Path, run_prefix: str) -> sc.AnnData:
-    runs = discover_runs(base_dir, run_prefix)
+def load_and_concat_runs(base_dir: Path, run_prefix: str, search_depth: int = 1) -> sc.AnnData:
+    print("STEP: Discovering run folders")
+    runs = discover_runs(base_dir, run_prefix, search_depth=search_depth)
     if not runs:
         raise FileNotFoundError(
             f"No run directories starting with '{run_prefix}' found in {base_dir}"
@@ -46,8 +58,10 @@ def load_and_concat_runs(base_dir: Path, run_prefix: str) -> sc.AnnData:
             print(f"Skipping {run} (missing cell_feature_matrix.h5 or cells.csv.gz)")
             continue
 
+        print(f"STEP: Reading run data ({run.name})")
         print(f"Loading run: {run.name}")
         ad_int = sc.read_10x_h5(str(h5_path))
+        print(f"STEP: Reading metadata ({run.name})")
         cell_info = pd.read_csv(cell_info_path, index_col=0)
 
         if len(cell_info) != ad_int.n_obs:
@@ -56,7 +70,14 @@ def load_and_concat_runs(base_dir: Path, run_prefix: str) -> sc.AnnData:
             )
 
         ad_int.obs = cell_info
-        ad_int.obs["run"] = run.name
+        rel_run = run.relative_to(base_dir)
+        run_label = "__".join(rel_run.parts)
+        ad_int.obs["run"] = run_label
+        ad_int.obs["run_leaf"] = run.name
+        if len(rel_run.parts) > 1:
+            ad_int.obs["run_parent"] = rel_run.parts[-2]
+        else:
+            ad_int.obs["run_parent"] = ""
         ad_list.append(ad_int)
 
     if not ad_list:
@@ -64,6 +85,7 @@ def load_and_concat_runs(base_dir: Path, run_prefix: str) -> sc.AnnData:
             "No valid runs loaded. Ensure each run contains cell_feature_matrix.h5 and cells.csv.gz."
         )
 
+    print("STEP: Concatenating data")
     ad = sc.concat(ad_list)
     ad.layers["counts"] = ad.X.copy()
     return ad
@@ -265,8 +287,11 @@ def run_clustering(
     args,
     output_data_dir: Path,
 ) -> tuple[sc.AnnData, str]:
+    print("STEP: Running PCA")
     sc.tl.pca(ad)
+    print("STEP: Computing neighbors")
     sc.pp.neighbors(ad, n_neighbors=args.n_neighbors, n_pcs=args.n_pcs)
+    print("STEP: Computing UMAP")
     sc.tl.umap(ad, min_dist=args.umap_min_dist)
 
     resolution_tokens = [token.strip() for token in args.leiden_resolutions.split(",") if token.strip()]
@@ -277,10 +302,12 @@ def run_clustering(
     for resolution_token in resolution_tokens:
         resolution = float(resolution_token)
         key = f"leiden_{resolution_token}"
+        print(f"STEP: Running Leiden clustering ({key})")
         sc.tl.leiden(ad, resolution=resolution, key_added=key)
         last_key = key
 
     marker_path = output_data_dir / "markers_by_cluster.csv"
+    print(f"STEP: Ranking marker genes ({last_key})")
     sc.tl.rank_genes_groups(ad, groupby=last_key, method="t-test")
     markers = sc.get.rank_genes_groups_df(ad, group=None)
     markers.to_csv(marker_path, index=False)
@@ -299,6 +326,7 @@ def run_compartment_clustering(
             "Run with --mana-aggregate first."
         )
 
+    print("STEP: Computing compartment neighbors")
     sc.pp.neighbors(
         ad,
         n_neighbors=args.mana_compartment_neighbors,
@@ -318,6 +346,7 @@ def run_compartment_clustering(
     for resolution_token in resolution_tokens:
         resolution = float(resolution_token)
         key = f"compartment_leiden_{resolution_token}"
+        print(f"STEP: Running compartment Leiden ({key})")
         sc.tl.leiden(ad, resolution=resolution, key_added=key, neighbors_key="mana_compartments")
         last_key = key
 
@@ -325,10 +354,14 @@ def run_compartment_clustering(
 
 
 def preprocess_for_clustering(ad: sc.AnnData, args) -> None:
+    print("STEP: Filtering cells by min counts")
     sc.pp.filter_cells(ad, min_counts=args.min_counts)
+    print("STEP: Filtering cells by min genes")
     sc.pp.filter_cells(ad, min_genes=args.min_genes)
 
+    print("STEP: Normalizing counts")
     sc.pp.normalize_total(ad, inplace=True, target_sum=args.target_sum)
+    print("STEP: Log1p transform")
     sc.pp.log1p(ad)
 
 
@@ -372,6 +405,7 @@ def maybe_run_mana(
         return
 
     if spatial_key not in ad.obsm:
+        print("STEP: Resolving spatial coordinates")
         inferred = _infer_spatial_from_obs(ad)
         if inferred is not None:
             ad.obsm[spatial_key] = inferred
@@ -391,6 +425,7 @@ def maybe_run_mana(
                 "Install squidpy or precompute ad.obsp['spatial_connectivities']."
             ) from exc
 
+        print("STEP: Building spatial neighbors graph")
         print("Building spatial neighbors graph with squidpy...")
         sq.gr.spatial_neighbors(ad, coord_type="generic", delaunay=True)
 
@@ -399,6 +434,7 @@ def maybe_run_mana(
                 f"Expected connectivity key '{connectivity_key}' after squidpy graph build, but not found."
             )
 
+    print("STEP: Computing weighted neighborhood representation")
     print("Running MANA weighted aggregation...")
     aggregate_neighbors_weighted(
         ad,

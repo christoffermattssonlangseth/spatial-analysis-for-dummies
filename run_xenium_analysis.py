@@ -39,6 +39,12 @@ def parse_args() -> argparse.Namespace:
         default="output-",
         help="Prefix used to discover run directories.",
     )
+    parser.add_argument(
+        "--run-search-depth",
+        type=int,
+        default=1,
+        help="Run directory search depth: 1=direct only, 2=one level below (default: 1).",
+    )
     parser.add_argument("--min-counts", type=int, default=50, help="Filter threshold for min counts.")
     parser.add_argument("--min-genes", type=int, default=15, help="Filter threshold for min genes.")
     parser.add_argument(
@@ -80,6 +86,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=2,
         help="Index in split run name used for sample ID extraction.",
+    )
+    parser.add_argument(
+        "--sample-id-source",
+        choices=["auto", "run", "parent"],
+        default="auto",
+        help="How to derive sample_id: from run label, parent folder, or auto (default: auto).",
     )
     parser.add_argument(
         "--mana-aggregate",
@@ -220,26 +232,49 @@ def main() -> None:
     if not base_dir.exists() or not base_dir.is_dir():
         raise NotADirectoryError(f"Invalid data directory: {base_dir}")
 
-    ad = load_and_concat_runs(base_dir=base_dir, run_prefix=args.run_prefix)
+    print("STEP: Reading data")
+    ad = load_and_concat_runs(
+        base_dir=base_dir,
+        run_prefix=args.run_prefix,
+        search_depth=args.run_search_depth,
+    )
+    print("STEP: Calculating QC metrics")
     sc.pp.calculate_qc_metrics(ad, percent_top=None, log1p=False, inplace=True)
 
-    ad.obs["sample_id"] = ad.obs["run"].astype(str).apply(
-        lambda run: infer_sample_id(run, args.sample_id_split, args.sample_id_index)
-    )
+    use_parent_sample = False
+    has_parent = "run_parent" in ad.obs.columns and ad.obs["run_parent"].astype(str).str.len().gt(0).any()
+    if args.sample_id_source == "parent":
+        use_parent_sample = True
+    elif args.sample_id_source == "auto":
+        use_parent_sample = bool(args.run_search_depth > 1 and has_parent)
 
+    if use_parent_sample and has_parent:
+        print("STEP: Deriving sample IDs from parent folder")
+        ad.obs["sample_id"] = ad.obs["run_parent"].astype(str)
+    else:
+        print("STEP: Deriving sample IDs from run label")
+        ad.obs["sample_id"] = ad.obs["run"].astype(str).apply(
+            lambda run: infer_sample_id(run, args.sample_id_split, args.sample_id_index)
+        )
+
+    print("STEP: Saving raw AnnData")
     raw_path = data_out_dir / "raw.h5ad"
     ad.write(raw_path)
     print(f"Saved raw AnnData: {raw_path}")
 
+    print("STEP: Building QC outputs")
     build_qc_outputs(ad, qc_dir)
     print(f"Saved QC outputs: {qc_dir}")
 
     ad_clustered = ad.copy()
+    print("STEP: Preprocessing for clustering")
     preprocess_for_clustering(ad_clustered, args)
+    print("STEP: Running clustering workflow")
     ad_clustered, cluster_key = run_clustering(ad_clustered, args, data_out_dir)
 
     compartment_key = None
     if args.mana_aggregate:
+        print("STEP: Running MANA weighted representation")
         maybe_run_mana(
             ad_clustered,
             enabled=True,
@@ -255,6 +290,7 @@ def main() -> None:
             normalize_weights=args.mana_normalize_weights,
             include_self=args.mana_include_self,
         )
+        print("STEP: Running compartment clustering")
         compartment_key = run_compartment_clustering(ad_clustered, args, data_out_dir)
     cluster_info = {
         "cluster_key": cluster_key,
@@ -262,6 +298,7 @@ def main() -> None:
         "leiden_resolutions": args.leiden_resolutions,
         "mana_compartment_resolutions": args.mana_compartment_resolutions,
     }
+    print("STEP: Saving clustered outputs")
     (data_out_dir / "cluster_info.json").write_text(json.dumps(cluster_info, indent=2))
     clustered_path = data_out_dir / "clustered.h5ad"
     ad_clustered.write(clustered_path)
@@ -271,6 +308,7 @@ def main() -> None:
     print(f"Leiden key used for marker ranking: {cluster_key}")
 
     if args.karospace_html:
+        print("STEP: Exporting KaroSpace HTML")
         karospace_color = args.karospace_color or cluster_key
         karospace_path = Path(args.karospace_html).expanduser().resolve()
         export_karospace_html(
