@@ -92,8 +92,11 @@ If `spatial_connectivities` is missing, the pipeline will try to build it with `
 - `--mana-sample-key`
 - `--mana-out-key`
 
-When `--mana-aggregate` is enabled, clustering uses the weighted representation
-(`--mana-out-key`) instead of the default PCA on `adata.X`.
+If `ad.obsm['spatial']` is missing, the pipeline will try to infer coordinates
+from common obs columns such as `x_centroid/y_centroid`, `x/y`, or `centroid_x/centroid_y`.
+
+MANA runs downstream of the standard clustering/UMAP and produces separate
+compartment labels (`compartment_leiden_*`) using the weighted representation.
 
 **KaroSpace HTML export (optional):**
 
@@ -151,3 +154,37 @@ python -m utils.karospace.cli /absolute/path/to/clustered.h5ad \
   --color leiden_1 \
   --groupby sample_id
 ```
+
+## Desktop app (local)
+
+The `app/` folder contains a local PySide6 desktop app to run the pipeline and view:
+- QC plots
+- KaroSpace spatial maps (embedded HTML)
+- UMAP plots
+- Compartment maps (MANA-based if enabled)
+
+Install dependencies:
+
+```bash
+pip install PySide6
+```
+
+Optional (for embedded KaroSpace viewer):
+
+```bash
+pip install PySide6-QtWebEngine
+```
+
+Run the app:
+
+```bash
+python3 -m app.main
+```
+
+Or:
+
+```bash
+python3 run_app.py
+```
+
+The app keeps a small list of recent runs at `~/.spatial-analysis-for-dummies/recent.json`.

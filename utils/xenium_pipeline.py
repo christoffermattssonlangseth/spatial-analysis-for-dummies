@@ -264,13 +264,9 @@ def run_clustering(
     ad: sc.AnnData,
     args,
     output_data_dir: Path,
-    neighbor_rep: Optional[str] = None,
 ) -> tuple[sc.AnnData, str]:
-    if neighbor_rep is None:
-        sc.tl.pca(ad)
-        sc.pp.neighbors(ad, n_neighbors=args.n_neighbors, n_pcs=args.n_pcs)
-    else:
-        sc.pp.neighbors(ad, n_neighbors=args.n_neighbors, use_rep=neighbor_rep)
+    sc.tl.pca(ad)
+    sc.pp.neighbors(ad, n_neighbors=args.n_neighbors, n_pcs=args.n_pcs)
     sc.tl.umap(ad, min_dist=args.umap_min_dist)
 
     resolution_tokens = [token.strip() for token in args.leiden_resolutions.split(",") if token.strip()]
@@ -292,12 +288,68 @@ def run_clustering(
     return ad, last_key
 
 
+def run_compartment_clustering(
+    ad: sc.AnnData,
+    args,
+    output_data_dir: Path,
+) -> str:
+    if args.mana_out_key not in ad.obsm:
+        raise KeyError(
+            f"Expected MANA output '{args.mana_out_key}' in adata.obsm. "
+            "Run with --mana-aggregate first."
+        )
+
+    sc.pp.neighbors(
+        ad,
+        n_neighbors=args.mana_compartment_neighbors,
+        use_rep=args.mana_out_key,
+        key_added="mana_compartments",
+    )
+
+    resolution_tokens = [
+        token.strip()
+        for token in args.mana_compartment_resolutions.split(",")
+        if token.strip()
+    ]
+    if not resolution_tokens:
+        raise ValueError("No valid MANA compartment resolutions were provided.")
+
+    last_key = ""
+    for resolution_token in resolution_tokens:
+        resolution = float(resolution_token)
+        key = f"compartment_leiden_{resolution_token}"
+        sc.tl.leiden(ad, resolution=resolution, key_added=key, neighbors_key="mana_compartments")
+        last_key = key
+
+    return last_key
+
+
 def preprocess_for_clustering(ad: sc.AnnData, args) -> None:
     sc.pp.filter_cells(ad, min_counts=args.min_counts)
     sc.pp.filter_cells(ad, min_genes=args.min_genes)
 
     sc.pp.normalize_total(ad, inplace=True, target_sum=args.target_sum)
     sc.pp.log1p(ad)
+
+
+def _infer_spatial_from_obs(ad: sc.AnnData) -> Optional[np.ndarray]:
+    candidate_pairs = [
+        ("x_centroid", "y_centroid"),
+        ("x", "y"),
+        ("x_coord", "y_coord"),
+        ("x_um", "y_um"),
+        ("x_umap", "y_umap"),
+        ("centroid_x", "centroid_y"),
+        ("center_x", "center_y"),
+        ("spatial_x", "spatial_y"),
+        ("x_pos", "y_pos"),
+        ("x_position", "y_position"),
+    ]
+    for x_col, y_col in candidate_pairs:
+        if x_col in ad.obs.columns and y_col in ad.obs.columns:
+            coords = ad.obs[[x_col, y_col]].to_numpy(dtype=float)
+            return coords
+    return None
 
 
 def maybe_run_mana(
@@ -320,10 +372,15 @@ def maybe_run_mana(
         return
 
     if spatial_key not in ad.obsm:
-        raise ValueError(
-            f"MANA requested, but ad.obsm['{spatial_key}'] is missing. "
-            "Provide spatial coordinates or choose another --mana-spatial-key."
-        )
+        inferred = _infer_spatial_from_obs(ad)
+        if inferred is not None:
+            ad.obsm[spatial_key] = inferred
+            print(f"Inferred spatial coordinates from obs columns -> ad.obsm['{spatial_key}']")
+        else:
+            raise ValueError(
+                f"MANA requested, but ad.obsm['{spatial_key}'] is missing. "
+                "Provide spatial coordinates or choose another --mana-spatial-key."
+            )
 
     if connectivity_key not in ad.obsp:
         try:

@@ -6,6 +6,7 @@ Replicate the core Xenium workflow from intership1 as a reusable CLI pipeline.
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import scanpy as sc
@@ -16,6 +17,7 @@ from utils.xenium_pipeline import (
     load_and_concat_runs,
     maybe_run_mana,
     preprocess_for_clustering,
+    run_compartment_clustering,
     run_clustering,
 )
 
@@ -134,6 +136,17 @@ def parse_args() -> argparse.Namespace:
         help="Output key in adata.obsm for MANA aggregation (default: X_cellcharter_weighted).",
     )
     parser.add_argument(
+        "--mana-compartment-resolutions",
+        default="1.0",
+        help="Comma-separated Leiden resolutions for MANA compartment clustering (default: 1.0).",
+    )
+    parser.add_argument(
+        "--mana-compartment-neighbors",
+        type=int,
+        default=15,
+        help="n_neighbors for MANA compartment clustering (default: 15).",
+    )
+    parser.add_argument(
         "--mana-no-normalize",
         dest="mana_normalize_weights",
         action="store_false",
@@ -223,28 +236,33 @@ def main() -> None:
 
     ad_clustered = ad.copy()
     preprocess_for_clustering(ad_clustered, args)
-    maybe_run_mana(
-        ad_clustered,
-        enabled=args.mana_aggregate,
-        spatial_key=args.mana_spatial_key,
-        connectivity_key=args.mana_connectivity_key,
-        n_layers=args.mana_n_layers,
-        hop_decay=args.mana_hop_decay,
-        distance_kernel=args.mana_distance_kernel,
-        distance_scale=args.mana_distance_scale,
-        use_rep=args.mana_use_rep,
-        sample_key=args.mana_sample_key,
-        out_key=args.mana_out_key,
-        normalize_weights=args.mana_normalize_weights,
-        include_self=args.mana_include_self,
-    )
-    neighbor_rep = args.mana_out_key if args.mana_aggregate else None
-    ad_clustered, cluster_key = run_clustering(
-        ad_clustered,
-        args,
-        data_out_dir,
-        neighbor_rep=neighbor_rep,
-    )
+    ad_clustered, cluster_key = run_clustering(ad_clustered, args, data_out_dir)
+
+    compartment_key = None
+    if args.mana_aggregate:
+        maybe_run_mana(
+            ad_clustered,
+            enabled=True,
+            spatial_key=args.mana_spatial_key,
+            connectivity_key=args.mana_connectivity_key,
+            n_layers=args.mana_n_layers,
+            hop_decay=args.mana_hop_decay,
+            distance_kernel=args.mana_distance_kernel,
+            distance_scale=args.mana_distance_scale,
+            use_rep=args.mana_use_rep,
+            sample_key=args.mana_sample_key,
+            out_key=args.mana_out_key,
+            normalize_weights=args.mana_normalize_weights,
+            include_self=args.mana_include_self,
+        )
+        compartment_key = run_compartment_clustering(ad_clustered, args, data_out_dir)
+    cluster_info = {
+        "cluster_key": cluster_key,
+        "compartment_key": compartment_key,
+        "leiden_resolutions": args.leiden_resolutions,
+        "mana_compartment_resolutions": args.mana_compartment_resolutions,
+    }
+    (data_out_dir / "cluster_info.json").write_text(json.dumps(cluster_info, indent=2))
     clustered_path = data_out_dir / "clustered.h5ad"
     ad_clustered.write(clustered_path)
 
