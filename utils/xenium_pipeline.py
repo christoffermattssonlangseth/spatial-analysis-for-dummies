@@ -572,6 +572,35 @@ def _infer_spatial_from_obs(ad: sc.AnnData) -> Optional[np.ndarray]:
     return None
 
 
+def ensure_spatial_coordinates(
+    ad: sc.AnnData,
+    *,
+    target_key: str = "spatial",
+    preferred_source_key: Optional[str] = None,
+) -> bool:
+    if target_key in ad.obsm:
+        return True
+
+    if preferred_source_key and preferred_source_key in ad.obsm:
+        ad.obsm[target_key] = np.asarray(ad.obsm[preferred_source_key])
+        print(f"Copied ad.obsm['{preferred_source_key}'] -> ad.obsm['{target_key}']")
+        return True
+
+    for source_key in ("spatial", "X_spatial"):
+        if source_key in ad.obsm:
+            ad.obsm[target_key] = np.asarray(ad.obsm[source_key])
+            print(f"Copied ad.obsm['{source_key}'] -> ad.obsm['{target_key}']")
+            return True
+
+    inferred = _infer_spatial_from_obs(ad)
+    if inferred is not None:
+        ad.obsm[target_key] = inferred
+        print(f"Inferred spatial coordinates from obs columns -> ad.obsm['{target_key}']")
+        return True
+
+    return False
+
+
 def maybe_run_mana(
     ad: sc.AnnData,
     *,
@@ -593,11 +622,11 @@ def maybe_run_mana(
 
     if spatial_key not in ad.obsm:
         print("STEP: Resolving spatial coordinates")
-        inferred = _infer_spatial_from_obs(ad)
-        if inferred is not None:
-            ad.obsm[spatial_key] = inferred
-            print(f"Inferred spatial coordinates from obs columns -> ad.obsm['{spatial_key}']")
-        else:
+        if not ensure_spatial_coordinates(
+            ad,
+            target_key=spatial_key,
+            preferred_source_key="spatial" if spatial_key != "spatial" else None,
+        ):
             raise ValueError(
                 f"MANA requested, but ad.obsm['{spatial_key}'] is missing. "
                 "Provide spatial coordinates or choose another --mana-spatial-key."

@@ -1,3 +1,28 @@
 .DS_Store
 ._DS_Store
 ._DS_store
+
+# Python cache/build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Local virtual environments
+.venv/
+venv/
+
+# Local app build artifacts and installers
+dist/
+build/
+*.dmg
+
+# Generated app icon artifacts (recreate via scripts/generate_macos_icon.py)
+assets/InSituCore.iconset/
+assets/InSituCore.icns
+assets/app_icon_1024.png
+
+# Pipeline outputs when written in-repo
+data/
+xenium_qc/
+plots/
+karospace.html

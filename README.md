@@ -217,3 +217,6 @@ Useful options:
 
 - Recent runs are stored at `~/.insitucore/recent.json`.
 - Utility modules are vendored under `utils/` (`MANA` + `KaroSpace` helpers).
+- Local build/output artifacts are git-ignored (`dist/`, caches, generated icons).
+- Run `bash scripts/repo_hygiene.sh` to inspect large files.
+- Run `bash scripts/repo_hygiene.sh --clean-local` to remove local build/cache artifacts.

@@ -13,6 +13,7 @@ import scanpy as sc
 from utils.xenium_pipeline import (
     build_qc_outputs,
     export_karospace_html,
+    ensure_spatial_coordinates,
     filter_for_clustering,
     infer_sample_id,
     load_and_concat_runs,
@@ -463,6 +464,18 @@ def main() -> None:
         "leiden_resolutions": args.leiden_resolutions,
         "mana_compartment_resolutions": args.mana_compartment_resolutions,
     }
+    print("STEP: Ensuring spatial coordinates for outputs")
+    has_spatial = ensure_spatial_coordinates(
+        ad_clustered,
+        target_key="spatial",
+        preferred_source_key=args.mana_spatial_key if args.mana_spatial_key != "spatial" else None,
+    )
+    if not has_spatial and args.karospace_html:
+        raise ValueError(
+            "KaroSpace export requested, but spatial coordinates are unavailable in clustered data. "
+            "Expected ad.obsm['spatial'] or inferable x/y columns in ad.obs."
+        )
+
     print("STEP: Saving clustered outputs")
     (data_out_dir / "cluster_info.json").write_text(json.dumps(cluster_info, indent=2))
     clustered_path = data_out_dir / "clustered.h5ad"
