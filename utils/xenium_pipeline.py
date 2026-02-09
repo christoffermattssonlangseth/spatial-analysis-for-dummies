@@ -302,47 +302,51 @@ def run_clustering(
             "Use one of: auto, expression, spatial."
         )
 
-    neighbors_key = "cluster_expr"
-    resolved_graph_mode = "expression"
+    expr_neighbors_key = "cluster_expr"
+    print("STEP: Computing expression neighbors")
+    sc.pp.neighbors(
+        ad,
+        n_neighbors=args.n_neighbors,
+        n_pcs=args.n_pcs,
+        key_added=expr_neighbors_key,
+    )
 
-    if requested_graph_mode in {"auto", "spatial"}:
-        try:
-            print("STEP: Building spatial neighbors graph for clustering")
-            ensure_spatial_connectivities(
-                ad,
-                spatial_key=spatial_key,
-                connectivity_key=connectivity_key,
-                sample_key=sample_key,
-            )
-            neighbors_key = _neighbors_key_from_connectivity_key(connectivity_key)
-            if neighbors_key not in ad.uns:
-                msg = (
-                    f"Spatial graph metadata ad.uns['{neighbors_key}'] is missing. "
-                    "Rebuild with squidpy spatial_neighbors or use expression graph mode."
-                )
-                if requested_graph_mode == "spatial":
-                    raise ValueError(msg)
-                print(f"STEP: {msg} Falling back to expression neighbors.")
-            else:
-                resolved_graph_mode = "spatial"
-                print(
-                    f"STEP: Using spatial neighbors graph ({neighbors_key}) for UMAP/clustering"
-                )
-        except (ImportError, ValueError, KeyError) as exc:
-            if requested_graph_mode == "spatial":
-                raise
-            print(
-                f"STEP: Spatial graph unavailable ({exc}); falling back to expression neighbors"
-            )
-
-    if resolved_graph_mode == "expression":
-        print("STEP: Computing expression neighbors")
-        sc.pp.neighbors(
+    spatial_neighbors_key = _neighbors_key_from_connectivity_key(connectivity_key)
+    spatial_graph_ready = False
+    try:
+        print("STEP: Building spatial neighbors graph for clustering")
+        ensure_spatial_connectivities(
             ad,
-            n_neighbors=args.n_neighbors,
-            n_pcs=args.n_pcs,
-            key_added=neighbors_key,
+            spatial_key=spatial_key,
+            connectivity_key=connectivity_key,
+            sample_key=sample_key,
         )
+        spatial_graph_ready = spatial_neighbors_key in ad.uns
+        if not spatial_graph_ready:
+            print(
+                "STEP: Spatial graph connectivities exist but metadata is missing in ad.uns; "
+                "spatial graph will not be used for clustering."
+            )
+    except (ImportError, ValueError, KeyError) as exc:
+        print(f"STEP: Spatial graph unavailable for clustering ({exc})")
+        if requested_graph_mode == "spatial":
+            raise
+
+    neighbors_key = expr_neighbors_key
+    resolved_graph_mode = "expression"
+    if requested_graph_mode == "spatial":
+        if not spatial_graph_ready:
+            raise ValueError(
+                "Spatial clustering requested, but spatial graph metadata is unavailable. "
+                "Ensure squidpy spatial_neighbors completed successfully."
+            )
+        neighbors_key = spatial_neighbors_key
+        resolved_graph_mode = "spatial"
+    elif requested_graph_mode == "auto" and spatial_graph_ready:
+        neighbors_key = spatial_neighbors_key
+        resolved_graph_mode = "spatial"
+
+    print(f"STEP: Graph selected for UMAP/clustering: {resolved_graph_mode} ({neighbors_key})")
 
     print("STEP: Computing UMAP")
     sc.tl.umap(ad, min_dist=args.umap_min_dist, neighbors_key=neighbors_key)
