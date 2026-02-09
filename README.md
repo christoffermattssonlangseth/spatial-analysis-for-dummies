@@ -1,4 +1,4 @@
-# InSituViewer
+![InSituViewer](assets/logo.png)
 
 Local desktop app for Xenium-style spatial transcriptomics analysis.
 
