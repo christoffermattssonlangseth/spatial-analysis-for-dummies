@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
-"""Generate macOS-style app icon assets for InSituCore."""
+"""Generate macOS-style icon assets for InSituCore.
+
+Primary behavior:
+- If `assets/icon.png` exists, use it as design source and apply a macOS polish pass.
+- Otherwise, fall back to a simple generated vector-style icon.
+"""
 
 from __future__ import annotations
 
+import argparse
 import shutil
 import subprocess
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter
 
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "assets"
+SOURCE_PNG = ASSETS / "icon.png"
 BASE_PNG = ASSETS / "app_icon_1024.png"
 ICNS_PATH = ASSETS / "InSituCore.icns"
 ICONSET_DIR = ASSETS / "InSituCore.iconset"
@@ -21,100 +28,91 @@ def _lerp(a: int, b: int, t: float) -> int:
     return int(round(a + (b - a) * t))
 
 
-def _build_background(size: int) -> Image.Image:
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    px = img.load()
-
-    top = (53, 71, 87)
-    bottom = (29, 40, 53)
-    left_tint = (44, 86, 97, 46)
-    right_tint = (83, 100, 119, 38)
-
-    for y in range(size):
-        t = y / (size - 1)
-        for x in range(size):
-            r = _lerp(top[0], bottom[0], t)
-            g = _lerp(top[1], bottom[1], t)
-            b = _lerp(top[2], bottom[2], t)
-            lt = int(left_tint[3] * (1 - x / (size - 1)))
-            rt = int(right_tint[3] * (x / (size - 1)))
-            r = min(255, r + (left_tint[0] * lt + right_tint[0] * rt) // 255)
-            g = min(255, g + (left_tint[1] * lt + right_tint[1] * rt) // 255)
-            b = min(255, b + (left_tint[2] * lt + right_tint[2] * rt) // 255)
-            px[x, y] = (r, g, b, 255)
-    return img
-
-
 def _rounded_mask(size: int, radius: int) -> Image.Image:
     mask = Image.new("L", (size, size), 0)
-    d = ImageDraw.Draw(mask)
-    d.rounded_rectangle((0, 0, size - 1, size - 1), radius=radius, fill=255)
+    draw = ImageDraw.Draw(mask)
+    draw.rounded_rectangle((0, 0, size - 1, size - 1), radius=radius, fill=255)
     return mask
 
 
-def make_base_icon(size: int = 1024) -> Image.Image:
-    icon = _build_background(size)
+def _apply_macos_shell(icon: Image.Image) -> Image.Image:
+    size = icon.width
     mask = _rounded_mask(size, int(size * 0.225))
-    cut = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    cut.paste(icon, (0, 0), mask)
-    icon = cut
+    shell = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    shell.paste(icon, (0, 0), mask)
 
-    draw = ImageDraw.Draw(icon)
-
-    # Soft top sheen for a native macOS icon finish.
+    # Soft top sheen.
     sheen = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    sd = ImageDraw.Draw(sheen)
-    sd.ellipse(
-        (-int(size * 0.08), -int(size * 0.44), int(size * 1.08), int(size * 0.54)),
-        fill=(255, 255, 255, 28),
+    d = ImageDraw.Draw(sheen)
+    d.ellipse(
+        (-int(size * 0.1), -int(size * 0.42), int(size * 1.1), int(size * 0.56)),
+        fill=(255, 255, 255, 26),
     )
-    sheen = sheen.filter(ImageFilter.GaussianBlur(radius=size * 0.025))
-    icon.alpha_composite(sheen)
+    sheen = sheen.filter(ImageFilter.GaussianBlur(radius=size * 0.024))
+    shell.alpha_composite(sheen)
 
-    cx, cy = size // 2, size // 2
-    ring_radius = int(size * 0.235)
-    ring_width = int(size * 0.06)
-
-    # Main ring.
-    draw.ellipse(
-        (cx - ring_radius, cy - ring_radius, cx + ring_radius, cy + ring_radius),
-        outline=(236, 243, 247, 230),
-        width=ring_width,
-    )
-
-    # Inner core.
-    core_r = int(size * 0.105)
-    draw.ellipse(
-        (cx - core_r, cy - core_r, cx + core_r, cy + core_r),
-        fill=(223, 236, 242, 232),
-    )
-
-    # Satellite nodes hinting at spatial compartments.
-    nodes = [
-        (cx - int(size * 0.19), cy - int(size * 0.12), int(size * 0.040), (162, 208, 214, 245)),
-        (cx + int(size * 0.21), cy - int(size * 0.01), int(size * 0.036), (188, 210, 233, 245)),
-        (cx - int(size * 0.02), cy + int(size * 0.22), int(size * 0.044), (140, 192, 201, 245)),
-    ]
-    for nx, ny, nr, color in nodes:
-        draw.line((cx, cy, nx, ny), fill=(236, 243, 247, 105), width=max(3, int(size * 0.008)))
-        draw.ellipse((nx - nr, ny - nr, nx + nr, ny + nr), fill=color)
-        # subtle inner highlight
-        h = int(nr * 0.35)
-        draw.ellipse((nx - h, ny - h, nx + h, ny + h), fill=(246, 251, 253, 160))
-
-    # Rim shadow for depth on light backgrounds.
-    shadow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    sh = ImageDraw.Draw(shadow)
-    sh.rounded_rectangle(
-        (int(size * 0.015), int(size * 0.015), int(size * 0.985), int(size * 0.985)),
+    # Outer rim shadow for depth on light backgrounds.
+    rim = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    rd = ImageDraw.Draw(rim)
+    rd.rounded_rectangle(
+        (int(size * 0.014), int(size * 0.014), int(size * 0.986), int(size * 0.986)),
         radius=int(size * 0.225),
-        outline=(0, 0, 0, 62),
+        outline=(0, 0, 0, 58),
         width=max(2, int(size * 0.01)),
     )
-    shadow = shadow.filter(ImageFilter.GaussianBlur(radius=size * 0.012))
-    icon.alpha_composite(shadow)
+    rim = rim.filter(ImageFilter.GaussianBlur(radius=size * 0.01))
+    shell.alpha_composite(rim)
+    return shell
 
-    return icon
+
+def _fallback_icon(size: int = 1024) -> Image.Image:
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    px = img.load()
+    top = (53, 71, 87)
+    bottom = (29, 40, 53)
+    for y in range(size):
+        t = y / (size - 1)
+        for x in range(size):
+            px[x, y] = (_lerp(top[0], bottom[0], t), _lerp(top[1], bottom[1], t), _lerp(top[2], bottom[2], t), 255)
+
+    draw = ImageDraw.Draw(img)
+    cx, cy = size // 2, size // 2
+    ring_r = int(size * 0.235)
+    draw.ellipse((cx - ring_r, cy - ring_r, cx + ring_r, cy + ring_r), outline=(236, 243, 247, 230), width=int(size * 0.06))
+    core_r = int(size * 0.105)
+    draw.ellipse((cx - core_r, cy - core_r, cx + core_r, cy + core_r), fill=(223, 236, 242, 232))
+    return _apply_macos_shell(img)
+
+
+def _trim_near_black(src: Image.Image, threshold: int = 10) -> Image.Image:
+    rgb = src.convert("RGB")
+    r, g, b = rgb.split()
+    max_channel = ImageChops.lighter(ImageChops.lighter(r, g), b)
+    mask = max_channel.point(lambda p: 255 if p > threshold else 0)
+    bbox = mask.getbbox()
+    if bbox:
+        return src.crop(bbox)
+    return src
+
+
+def _icon_from_source(source_path: Path, size: int = 1024) -> Image.Image:
+    src = Image.open(source_path).convert("RGBA")
+    src = _trim_near_black(src, threshold=10)
+
+    # Slightly tone down neon intensity for a more native app icon feel.
+    src = ImageEnhance.Color(src).enhance(0.90)
+    src = ImageEnhance.Contrast(src).enhance(1.04)
+
+    # Fill the tile directly to avoid adding dark framing bars around the source art.
+    src = src.resize((size, size), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    canvas.alpha_composite(src, dest=(0, 0))
+
+    # Light unifying tint to soften glow extremes.
+    tint = Image.new("RGBA", (size, size), (22, 35, 58, 18))
+    canvas.alpha_composite(tint)
+
+    return _apply_macos_shell(canvas)
 
 
 def write_iconset(base_img: Image.Image) -> None:
@@ -124,18 +122,13 @@ def write_iconset(base_img: Image.Image) -> None:
 
     icon_sizes = [16, 32, 128, 256, 512]
     for size in icon_sizes:
-        base_img.resize((size, size), Image.Resampling.LANCZOS).save(
-            ICONSET_DIR / f"icon_{size}x{size}.png"
-        )
+        base_img.resize((size, size), Image.Resampling.LANCZOS).save(ICONSET_DIR / f"icon_{size}x{size}.png")
         double = size * 2
-        base_img.resize((double, double), Image.Resampling.LANCZOS).save(
-            ICONSET_DIR / f"icon_{size}x{size}@2x.png"
-        )
+        base_img.resize((double, double), Image.Resampling.LANCZOS).save(ICONSET_DIR / f"icon_{size}x{size}@2x.png")
 
 
 def build_icns() -> None:
-    # First try native iconutil. Some environments have stricter iconset validation,
-    # so we fall back to Pillow's ICNS writer for portability.
+    # Try iconutil first; fallback to Pillow ICNS writer.
     if shutil.which("iconutil") is not None:
         if ICNS_PATH.exists():
             ICNS_PATH.unlink()
@@ -158,9 +151,28 @@ def build_icns() -> None:
     )
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate macOS app icon assets.")
+    parser.add_argument(
+        "--source",
+        default=str(SOURCE_PNG),
+        help="Path to source PNG to riff on (default: assets/icon.png).",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
     ASSETS.mkdir(parents=True, exist_ok=True)
-    base = make_base_icon(1024)
+
+    source_path = Path(args.source).expanduser().resolve()
+    if source_path.exists():
+        base = _icon_from_source(source_path, size=1024)
+        print(f"Using source icon: {source_path}")
+    else:
+        base = _fallback_icon(1024)
+        print(f"Source icon not found at {source_path}; using fallback icon.")
+
     base.save(BASE_PNG)
     write_iconset(base)
     build_icns()
