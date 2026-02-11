@@ -7,6 +7,7 @@ Local desktop app for Xenium-style spatial transcriptomics analysis.
 - Spatial maps (static plot + optional KaroSpace)
 - UMAP
 - MANA-based compartment maps
+- Gene-expression dotplots
 
 ## Quick start
 
@@ -129,17 +130,23 @@ This will produce `dist/InSituCore-portable.zip`.
   `overlaps_nucleus OR nucleus_distance <= Tx max distance (um)`.
 5. Optional: enable `MANA weighted aggregation`.
 6. Optional: enable `Export KaroSpace HTML`.
-7. Optional: open `Analysis` tab and click `Show advanced parameters` to configure:
+7. Open `Analysis Controls` in the workspace navigator (expanded by default) to configure:
 - neighbors / PCs / UMAP min_dist
 - clustering method (`Leiden`, `Louvain`, or `KMeans`)
 - method-specific sweep values (resolutions or K list)
 8. In `Run` -> `Optional Steps`, choose MANA representation (`scVI` recommended).
-9. Click `Run`.
-10. Use top-bar actions: `Load Outputs`, `Generate UMAP`, `Generate Compartments`.
-11. Use `Spatial (Static)` tab for `Generate Spatial Map` (fast native plot) and `Spatial (Interactive)` for KaroSpace.
-12. For compartments, choose a compartment key in the `Compartment Map` tab:
+9. Click `Run` (top bar).
+10. Use top-bar `Load Outputs` to refresh an existing output directory.
+11. Use the workspace navigator on the left to switch pages:
+- `Spatial Static` for `Generate Spatial Map` (fast native plot)
+- `Spatial Interactive` for embedded KaroSpace
+- `UMAP` for cluster-key-aware UMAP generation
+- `Compartment Map` for compartment key selection and map generation
+- `Gene Expression` for top-N marker dotplots
+12. For compartments, choose a compartment key in `Compartment Map`:
 - `Auto (primary)` uses the pipeline-selected default.
 - Or choose a specific key like `compartment_gmm_k6` / `compartment_leiden_1.0`.
+13. For dotplots, choose a group key and top-gene count in `Gene Expression`.
 
 ## Supported input layouts
 
@@ -194,9 +201,10 @@ Written under `--out-dir`:
 - `xenium_qc/summary_by_run.csv`
 - `xenium_qc/gene_detection_overall.csv`
 - `xenium_qc/*.png`
-- `plots/spatial.png` (generated from `Spatial (Static)` tab)
-- `plots/umap.png` (generated from app action)
-- `plots/compartments.png` (generated from app action)
+- `plots/spatial.png` (generated from `Spatial Static`)
+- `plots/umap.png` (generated from `UMAP`)
+- `plots/compartments.png` (generated from `Compartment Map`)
+- `plots/gene_expression_dotplot.png` (generated from `Gene Expression`)
 - `karospace.html` (if export enabled)
 
 ## CLI fallback
