@@ -2,8 +2,20 @@ name: insitucore
 channels:
   - conda-forge
 dependencies:
-  - python
+  - python>=3.10,<3.13
   - pip
   - pip:
-      - -r requirements.txt
-      - -r requirements-optional.txt
+      - anndata
+      - matplotlib
+      - numpy
+      - pandas
+      - PySide6
+      - scanpy
+      - scikit-learn
+      - scipy
+      - seaborn
+      - squidpy
+      - louvain
+      - scvi-tools
+      - cellcharter
+      - PySide6-QtWebEngine
